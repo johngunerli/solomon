@@ -134,3 +134,37 @@ def resize_image(input_img, new_width, new_height):
     else:
         return input_img.resize((new_width, new_height), Image.NEAREST)
     return None
+
+
+def convert_image(input_image_path, output_image_path=None):
+    from PIL import Image
+    import os
+
+    if output_image_path is None:
+        base_name = os.path.splitext(input_image_path)[0]
+        output_image_path = f"{base_name}.jpeg"
+        print(
+            f"No output path provided. Converting image to JPEG format at: {output_image_path}"
+        )
+    file_extension = os.path.splitext(input_image_path)[1].lower()
+
+    if file_extension == ".heic":
+        try:
+            import pillow_heif
+
+            pillow_heif.register_heif_opener()
+        except ImportError:
+            import sys
+
+            print(
+                "pillow-heif package not found. Please install it using 'pip install pillow-heif' to handle HEIC files."
+            )
+            sys.exit(1)
+
+    with Image.open(input_image_path) as img:
+        img = img.convert("RGB") if img.mode != "RGB" else img
+        if output_image_path.endswith(".jpeg") or output_image_path == None:
+
+            img.save(output_image_path, "JPEG")
+        else:
+            img.save(output_image_path)
