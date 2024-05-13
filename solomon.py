@@ -1,5 +1,10 @@
 import subprocess
-from numba import cuda
+
+# supress warnings
+import warnings
+
+warnings.filterwarnings("ignore")
+
 
 # GPU Detection
 gpu = False
@@ -78,62 +83,57 @@ def download_blob_to_directory(blob_name, idx, bucket_name="your-default-bucket"
 
 
 def resize_image(input_img, new_width, new_height):
-    """
-    Resize an image to a new width and height, using GPU acceleration if available.
-    Args:
-        input_img (np.array): Image to resize.
-        new_width (int): New width for the image.
-        new_height (int): New height for the image.
+    import numpy as np
 
-    Raises:
-        ValueError: If input_img is not of type np.uint8.
-
-    Returns:
-        np.array: Resized image.
-    """
+    if not isinstance(input_img, np.ndarray) or input_img.dtype != np.uint8:
+        raise ValueError("Input image must be a numpy array of type uint8.")
     if gpu_available:
-        import ctypes
-        import numpy as np
-        import os
+        import cupy as cp
 
-        # execute the cuda compilation
-        # os.system("nvcc -o resize.so --shared --compiler-options '-fPIC' resize.cu")
-        lib = ctypes.CDLL("./resize.so")
-        lib.resize_image.argtypes = [
-            ctypes.POINTER(ctypes.c_ubyte),
-            ctypes.POINTER(ctypes.c_ubyte),
-            ctypes.c_int,
-            ctypes.c_int,
-            ctypes.c_int,
-            ctypes.c_int,
-            ctypes.c_int,
-        ]
-        in_height, in_width = input_img.shape[:2]
-        channels = input_img.shape[2] if input_img.ndim == 3 else 1
-        output_img = (
-            np.zeros((new_height, new_width, channels), dtype=np.uint8)
-            if channels > 1
-            else np.zeros((new_height, new_width), dtype=np.uint8)
+        with open("resize.cu", "r") as f:
+            cuda_code = f.read()
+
+        module = cp.RawModule(code=cuda_code)
+        resize_image_kernel = module.get_function("resize_image_kernel")
+        if len(input_img.shape) == 2:
+            input_img = input_img[:, :, np.newaxis]
+            channels = 1
+
+        output_height, output_width = new_height, new_width
+
+        input_img_gpu = cp.asarray(input_img)
+        output_img_gpu = cp.empty(
+            (output_height, output_width, channels), dtype=cp.uint8
         )
 
-        if input_img.dtype != np.uint8:
-            raise ValueError("input_img must be an array of type np.uint8")
-
-        lib.resize_image(
-            input_img.ctypes.data_as(ctypes.POINTER(ctypes.c_ubyte)),
-            output_img.ctypes.data_as(ctypes.POINTER(ctypes.c_ubyte)),
-            in_height,
-            in_width,
-            new_height,
-            new_width,
-            channels,
+        block_size = (16, 16, 1)
+        grid_size = (
+            int(np.ceil(output_width / 16)),
+            int(np.ceil(output_height / 16)),
+            1,
         )
-        # delete the shared library
-        # os.system("rm resize.so")
-        return output_img
+
+        resize_image_kernel(
+            grid_size,
+            block_size,
+            (
+                input_img_gpu,
+                output_img_gpu,
+                input_img.shape[0],
+                input_img.shape[1],
+                output_height,
+                output_width,
+                channels,
+            ),
+        )
+
+        return output_img_gpu.get()
     else:
-        return input_img.resize((new_width, new_height), Image.NEAREST)
-    return None
+        from PIL import Image
+
+        pil_img = Image.fromarray(input_img)
+        resized_pil_img = pil_img.resize((new_width, new_height), Image.NEAREST)
+        return np.array(resized_pil_img)
 
 
 def convert_image(input_image_path, output_image_path=None):
